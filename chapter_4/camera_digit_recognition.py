@@ -124,8 +124,14 @@ def preprocess_image(img):
     # 高斯模糊，减少噪声
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     
-    # 二值化
-    _, thresh = cv2.threshold(blurred, 90, 255, cv2.THRESH_BINARY_INV)
+    # 自适应阈值二值化，适应不同光照条件
+    thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                   cv2.THRESH_BINARY_INV, 11, 2)
+    
+    # 形态学操作，去除小噪声
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
     
     return thresh
 
@@ -149,18 +155,36 @@ def process_contour(contour, img):
     返回:
         处理后的数字图像，边界框
     """
+    # 计算轮廓面积
+    area = cv2.contourArea(contour)
+    
     # 计算边界框
     x, y, w, h = cv2.boundingRect(contour)
     
     # 过滤太小的轮廓
-    if w < 20 or h < 20:
+    if w < 30 or h < 30 or area < 200:
+        return None, None
+    
+    # 检查宽高比，数字通常接近正方形，但3可能更宽
+    aspect_ratio = float(w) / h
+    if aspect_ratio < 0.4 or aspect_ratio > 1.8:
+        return None, None
+    
+    # 计算轮廓周长
+    perimeter = cv2.arcLength(contour, True)
+    
+    # 检查轮廓的紧凑度，3的紧凑度可能较低
+    if perimeter == 0:
+        return None, None
+    compactness = 4 * np.pi * area / (perimeter * perimeter)
+    if compactness < 0.1:
         return None, None
     
     # 扩展边界框，确保包含整个数字
-    x = max(0, x - 10)
-    y = max(0, y - 10)
-    w = min(img.shape[1] - x, w + 20)
-    h = min(img.shape[0] - y, h + 20)
+    x = max(0, x - 15)
+    y = max(0, y - 15)
+    w = min(img.shape[1] - x, w + 30)
+    h = min(img.shape[0] - y, h + 30)
     
     # 提取数字区域
     roi = img[y:y+h, x:x+w]
@@ -168,8 +192,9 @@ def process_contour(contour, img):
     # 转换为灰度图
     gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     
-    # 二值化
-    _, thresh_roi = cv2.threshold(gray_roi, 90, 255, cv2.THRESH_BINARY_INV)
+    # 自适应阈值二值化
+    thresh_roi = cv2.adaptiveThreshold(gray_roi, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                   cv2.THRESH_BINARY_INV, 11, 2)
     
     # 调整大小为8x8，与训练数据一致
     resized = cv2.resize(thresh_roi, (8, 8), interpolation=cv2.INTER_AREA)
@@ -200,8 +225,8 @@ def train_model():
     y_onehot = encoder.fit_transform(y.reshape(-1, 1)).toarray()
     
     # 创建并训练模型
-    nn = NeuralNetwork(input_size=64, hidden_size=64, output_size=10)
-    nn.train(X, y_onehot, epochs=100, learning_rate=0.5)
+    nn = NeuralNetwork(input_size=64, hidden_size=128, output_size=10)  # 增加隐藏层神经元数量
+    nn.train(X, y_onehot, epochs=200, learning_rate=0.3)  # 增加训练轮数，调整学习率
     
     return nn
 
